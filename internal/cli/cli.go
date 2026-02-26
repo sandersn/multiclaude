@@ -5517,7 +5517,7 @@ func (c *CLI) restartClaude(args []string) error {
 	}
 
 	// Get the prompt file path (stored as ~/.multiclaude/prompts/<agent-name>.md)
-	promptFile := filepath.Join(c.paths.Root, "prompts", agentName+".md")
+	promptFile := filepath.Join(c.paths.PromptsDir, agentName+".md")
 
 	// Check if the session has history by looking for the .jsonl file
 	// Claude stores sessions in ~/.claude/projects/<encoded-path>/<session-id>.jsonl
@@ -5669,12 +5669,11 @@ func ParseFlags(args []string) (map[string]string, []string) {
 // savePromptToFile writes prompt text to the prompts directory and returns the path.
 // This is a common helper used by various prompt-writing functions.
 func (c *CLI) savePromptToFile(agentName, promptText string) (string, error) {
-	promptDir := filepath.Join(c.paths.Root, "prompts")
-	if err := os.MkdirAll(promptDir, 0755); err != nil {
+	if err := os.MkdirAll(c.paths.PromptsDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create prompt directory: %w", err)
 	}
 
-	promptPath := filepath.Join(promptDir, fmt.Sprintf("%s.md", agentName))
+	promptPath := filepath.Join(c.paths.PromptsDir, fmt.Sprintf("%s.md", agentName))
 	if err := os.WriteFile(promptPath, []byte(promptText), 0644); err != nil {
 		return "", fmt.Errorf("failed to write prompt file: %w", err)
 	}

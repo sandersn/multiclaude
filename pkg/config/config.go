@@ -18,8 +18,10 @@ type Paths struct {
 	WorktreesDir    string // wts/
 	MessagesDir     string // messages/
 	OutputDir       string // output/
-	ClaudeConfigDir string // claude-config/
-	ArchiveDir      string // archive/ (for paused work)
+	ClaudeConfigDir   string // claude-config/
+	ArchiveDir        string // archive/ (for paused work)
+	PromptsDir        string // prompts/ (agent prompt files for Claude)
+	CopilotAgentsDir  string // ~/.copilot/agents/ (agent definition files for Copilot)
 }
 
 // DefaultPaths returns the default paths for multiclaude
@@ -32,17 +34,19 @@ func DefaultPaths() (*Paths, error) {
 	root := filepath.Join(home, ".multiclaude")
 
 	return &Paths{
-		Root:            root,
-		DaemonPID:       filepath.Join(root, "daemon.pid"),
-		DaemonSock:      filepath.Join(root, "daemon.sock"),
-		DaemonLog:       filepath.Join(root, "daemon.log"),
-		StateFile:       filepath.Join(root, "state.json"),
-		ReposDir:        filepath.Join(root, "repos"),
-		WorktreesDir:    filepath.Join(root, "wts"),
-		MessagesDir:     filepath.Join(root, "messages"),
-		OutputDir:       filepath.Join(root, "output"),
-		ClaudeConfigDir: filepath.Join(root, "claude-config"),
-		ArchiveDir:      filepath.Join(root, "archive"),
+		Root:             root,
+		DaemonPID:        filepath.Join(root, "daemon.pid"),
+		DaemonSock:       filepath.Join(root, "daemon.sock"),
+		DaemonLog:        filepath.Join(root, "daemon.log"),
+		StateFile:        filepath.Join(root, "state.json"),
+		ReposDir:         filepath.Join(root, "repos"),
+		WorktreesDir:     filepath.Join(root, "wts"),
+		MessagesDir:      filepath.Join(root, "messages"),
+		OutputDir:        filepath.Join(root, "output"),
+		ClaudeConfigDir:  filepath.Join(root, "claude-config"),
+		ArchiveDir:       filepath.Join(root, "archive"),
+		PromptsDir:       filepath.Join(root, "prompts"),
+		CopilotAgentsDir: filepath.Join(home, ".copilot", "agents"),
 	}, nil
 }
 
@@ -56,9 +60,14 @@ func (p *Paths) EnsureDirectories() error {
 		p.OutputDir,
 		p.ClaudeConfigDir,
 		p.ArchiveDir,
+		p.PromptsDir,
+		p.CopilotAgentsDir,
 	}
 
 	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}
@@ -131,17 +140,19 @@ func (p *Paths) AgentCommandsDir(repoName, agentName string) string {
 // This eliminates duplicate test setup code and ensures consistent path configuration.
 func NewTestPaths(tmpDir string) *Paths {
 	return &Paths{
-		Root:            tmpDir,
-		DaemonPID:       filepath.Join(tmpDir, "daemon.pid"),
-		DaemonSock:      filepath.Join(tmpDir, "daemon.sock"),
-		DaemonLog:       filepath.Join(tmpDir, "daemon.log"),
-		StateFile:       filepath.Join(tmpDir, "state.json"),
-		ReposDir:        filepath.Join(tmpDir, "repos"),
-		WorktreesDir:    filepath.Join(tmpDir, "wts"),
-		MessagesDir:     filepath.Join(tmpDir, "messages"),
-		OutputDir:       filepath.Join(tmpDir, "output"),
-		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
-		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		Root:             tmpDir,
+		DaemonPID:        filepath.Join(tmpDir, "daemon.pid"),
+		DaemonSock:       filepath.Join(tmpDir, "daemon.sock"),
+		DaemonLog:        filepath.Join(tmpDir, "daemon.log"),
+		StateFile:        filepath.Join(tmpDir, "state.json"),
+		ReposDir:         filepath.Join(tmpDir, "repos"),
+		WorktreesDir:     filepath.Join(tmpDir, "wts"),
+		MessagesDir:      filepath.Join(tmpDir, "messages"),
+		OutputDir:        filepath.Join(tmpDir, "output"),
+		ClaudeConfigDir:  filepath.Join(tmpDir, "claude-config"),
+		ArchiveDir:       filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 }
 

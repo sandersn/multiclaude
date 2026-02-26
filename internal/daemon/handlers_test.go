@@ -23,17 +23,19 @@ func setupTestDaemonWithState(t *testing.T, setupFn func(*state.State)) (*Daemon
 	}
 
 	paths := &config.Paths{
-		Root:            tmpDir,
-		DaemonPID:       filepath.Join(tmpDir, "daemon.pid"),
-		DaemonSock:      filepath.Join(tmpDir, "daemon.sock"),
-		DaemonLog:       filepath.Join(tmpDir, "daemon.log"),
-		StateFile:       filepath.Join(tmpDir, "state.json"),
-		ReposDir:        filepath.Join(tmpDir, "repos"),
-		WorktreesDir:    filepath.Join(tmpDir, "wts"),
-		MessagesDir:     filepath.Join(tmpDir, "messages"),
-		OutputDir:       filepath.Join(tmpDir, "output"),
-		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
-		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		Root:             tmpDir,
+		DaemonPID:        filepath.Join(tmpDir, "daemon.pid"),
+		DaemonSock:       filepath.Join(tmpDir, "daemon.sock"),
+		DaemonLog:        filepath.Join(tmpDir, "daemon.log"),
+		StateFile:        filepath.Join(tmpDir, "state.json"),
+		ReposDir:         filepath.Join(tmpDir, "repos"),
+		WorktreesDir:     filepath.Join(tmpDir, "wts"),
+		MessagesDir:      filepath.Join(tmpDir, "messages"),
+		OutputDir:        filepath.Join(tmpDir, "output"),
+		ClaudeConfigDir:  filepath.Join(tmpDir, "claude-config"),
+		ArchiveDir:       filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {

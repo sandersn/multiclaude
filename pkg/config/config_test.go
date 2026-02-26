@@ -60,7 +60,9 @@ func TestEnsureDirectories(t *testing.T) {
 		MessagesDir:     filepath.Join(tmpDir, "test-multiclaude", "messages"),
 		OutputDir:       filepath.Join(tmpDir, "test-multiclaude", "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "test-multiclaude", "claude-config"),
-		ArchiveDir:      filepath.Join(tmpDir, "test-multiclaude", "archive"),
+		ArchiveDir:       filepath.Join(tmpDir, "test-multiclaude", "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "test-multiclaude", "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "test-multiclaude", "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {

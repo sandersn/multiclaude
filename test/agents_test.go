@@ -51,6 +51,8 @@ func TestAgentTemplatesCopiedOnInit(t *testing.T) {
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -400,6 +402,8 @@ func TestAgentsSpawnCommand(t *testing.T) {
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -525,6 +529,8 @@ func TestAgentDefinitionsSentToSupervisor(t *testing.T) {
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -631,6 +637,8 @@ func TestSpawnPersistentAgent(t *testing.T) {
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -720,6 +728,8 @@ func TestSpawnEphemeralAgent(t *testing.T) {
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {

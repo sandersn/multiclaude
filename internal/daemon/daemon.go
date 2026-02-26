@@ -1622,12 +1622,11 @@ func (d *Daemon) handleSpawnAgent(req socket.Request) socket.Response {
 	}
 
 	// Write prompt to file
-	promptDir := filepath.Join(d.paths.Root, "prompts")
-	if err := os.MkdirAll(promptDir, 0755); err != nil {
+	if err := os.MkdirAll(d.paths.PromptsDir, 0755); err != nil {
 		return socket.ErrorResponse("failed to create prompt directory: %v", err)
 	}
 
-	promptPath := filepath.Join(promptDir, fmt.Sprintf("%s.md", agentName))
+	promptPath := filepath.Join(d.paths.PromptsDir, fmt.Sprintf("%s.md", agentName))
 	if err := os.WriteFile(promptPath, []byte(promptText), 0644); err != nil {
 		return socket.ErrorResponse("failed to write prompt file: %v", err)
 	}
@@ -2129,12 +2128,11 @@ func (d *Daemon) writePromptFileWithPrefix(repoName string, agentType state.Agen
 	}
 
 	// Create prompt file in prompts directory
-	promptDir := filepath.Join(d.paths.Root, "prompts")
-	if err := os.MkdirAll(promptDir, 0755); err != nil {
+	if err := os.MkdirAll(d.paths.PromptsDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create prompt directory: %w", err)
 	}
 
-	promptPath := filepath.Join(promptDir, fmt.Sprintf("%s.md", agentName))
+	promptPath := filepath.Join(d.paths.PromptsDir, fmt.Sprintf("%s.md", agentName))
 	if err := os.WriteFile(promptPath, []byte(promptText), 0644); err != nil {
 		return "", fmt.Errorf("failed to write prompt file: %w", err)
 	}
@@ -2162,7 +2160,7 @@ func (d *Daemon) restartAgent(repoName, agentName string, agent state.Agent, rep
 	}
 
 	// Get the existing prompt file path
-	promptFile := filepath.Join(d.paths.Root, "prompts", agentName+".md")
+	promptFile := filepath.Join(d.paths.PromptsDir, agentName+".md")
 	if _, err := os.Stat(promptFile); os.IsNotExist(err) {
 		// Regenerate the prompt file if it doesn't exist
 		promptFile, err = d.writePromptFile(repoName, prompts.AgentType(agent.Type), agentName)

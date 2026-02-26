@@ -116,6 +116,8 @@ func TestOrphanedTmuxSessionCleanup(t *testing.T) {
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -265,6 +267,8 @@ func TestStaleSocketCleanup(t *testing.T) {
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -383,6 +387,8 @@ func TestDaemonCrashRecovery(t *testing.T) {
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {

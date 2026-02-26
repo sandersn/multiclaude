@@ -55,6 +55,8 @@ func setupIntegrationTest(t *testing.T, repoName string) (*cli.CLI, *daemon.Daem
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -283,6 +285,8 @@ func TestRepoInitializationIntegration(t *testing.T) {
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -445,6 +449,8 @@ func TestRepoInitializationWithMergeQueueDisabled(t *testing.T) {
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {

@@ -49,6 +49,8 @@ func TestPhase2Integration(t *testing.T) {
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 		ArchiveDir:      filepath.Join(tmpDir, "archive"),
+		PromptsDir:       filepath.Join(tmpDir, "prompts"),
+		CopilotAgentsDir: filepath.Join(tmpDir, "copilot-agents"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
