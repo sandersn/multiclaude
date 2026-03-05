@@ -28,8 +28,8 @@ import (
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/internal/templates"
 	"github.com/dlorenc/multiclaude/internal/worktree"
-	"github.com/dlorenc/multiclaude/pkg/claude"
 	"github.com/dlorenc/multiclaude/pkg/config"
+	"github.com/dlorenc/multiclaude/pkg/runner"
 	"github.com/dlorenc/multiclaude/pkg/tmux"
 )
 
@@ -130,15 +130,6 @@ func NewWithPaths(paths *config.Paths) *CLI {
 	return cli
 }
 
-// getClaudeBinary resolves the claude binary path
-func (c *CLI) getClaudeBinary() (string, error) {
-	binaryPath, err := exec.LookPath("claude")
-	if err != nil {
-		return "", errors.ClaudeNotFound(err)
-	}
-	return binaryPath, nil
-}
-
 // loadState loads the state file, wrapping errors with context
 func (c *CLI) loadState() (*state.State, error) {
 	st, err := state.Load(c.paths.StateFile)
@@ -146,6 +137,35 @@ func (c *CLI) loadState() (*state.State, error) {
 		return nil, fmt.Errorf("failed to load state: %w", err)
 	}
 	return st, nil
+}
+
+// getRepoProvider returns the provider for a repository from state.
+// Defaults to "claude" if not set (backwards compat).
+func (c *CLI) getRepoProvider(repoName string) runner.Provider {
+	st, err := state.Load(c.paths.StateFile)
+	if err != nil {
+		return runner.DefaultProvider
+	}
+	repo, exists := st.GetRepo(repoName)
+	if !exists {
+		return runner.DefaultProvider
+	}
+	p := runner.Provider(repo.GetProvider())
+	if !p.IsValid() {
+		return runner.DefaultProvider
+	}
+	return p
+}
+
+// createRunnerForRepo creates a runner for the given repo's provider.
+func (c *CLI) createRunnerForRepo(repoName string) (runner.Runner, runner.Provider, error) {
+	provider := c.getRepoProvider(repoName)
+	tmuxClient := tmux.NewClient()
+	r, err := runner.NewRunner(provider, tmuxClient)
+	if err != nil {
+		return nil, provider, fmt.Errorf("failed to create %s runner: %w", provider, err)
+	}
+	return r, provider, nil
 }
 
 // sendDaemonRequest sends a request to the daemon and handles common error cases.
@@ -1163,7 +1183,7 @@ func (c *CLI) initRepo(args []string) error {
 	flags, posArgs := ParseFlags(args)
 
 	if len(posArgs) < 1 {
-		return errors.InvalidUsage("usage: multiclaude init <github-url> [name] [--no-merge-queue] [--mq-track=all|author|assigned]")
+		return errors.InvalidUsage("usage: multiclaude init <github-url> [name] [--no-merge-queue] [--mq-track=all|author|assigned] [--provider=claude|copilot]")
 	}
 
 	githubURL := strings.TrimRight(posArgs[0], "/")
@@ -1209,8 +1229,18 @@ func (c *CLI) initRepo(args []string) error {
 		TrackMode: mqTrackMode,
 	}
 
+	// Parse provider flag (default: claude)
+	provider := runner.DefaultProvider
+	if providerFlag, ok := flags["provider"]; ok {
+		provider = runner.Provider(providerFlag)
+		if !provider.IsValid() {
+			return fmt.Errorf("invalid --provider value: %q (must be 'claude' or 'copilot')", providerFlag)
+		}
+	}
+
 	fmt.Printf("Initializing repository: %s\n", repoName)
 	fmt.Printf("GitHub URL: %s\n", githubURL)
+	fmt.Printf("Provider: %s\n", provider)
 	if mqEnabled {
 		fmt.Printf("Merge queue: enabled (tracking: %s)\n", mqTrackMode)
 	} else {
@@ -1329,19 +1359,19 @@ func (c *CLI) initRepo(args []string) error {
 	}
 
 	// Generate session IDs for agents
-	supervisorSessionID, err := claude.GenerateSessionID()
+	supervisorSessionID, err := runner.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate supervisor session ID: %w", err)
 	}
 
 	var mergeQueueSessionID, prShepherdSessionID string
 	if mqEnabled {
-		mergeQueueSessionID, err = claude.GenerateSessionID()
+		mergeQueueSessionID, err = runner.GenerateSessionID()
 		if err != nil {
 			return fmt.Errorf("failed to generate merge-queue session ID: %w", err)
 		}
 	} else if psEnabled {
-		prShepherdSessionID, err = claude.GenerateSessionID()
+		prShepherdSessionID, err = runner.GenerateSessionID()
 		if err != nil {
 			return fmt.Errorf("failed to generate pr-shepherd session ID: %w", err)
 		}
@@ -1371,19 +1401,23 @@ func (c *CLI) initRepo(args []string) error {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
 	}
 
-	// Start Claude in supervisor window (skip in test mode)
+	// Start agent in supervisor window (skip in test mode)
 	var supervisorPID, mergeQueuePID, prShepherdPID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
-		// Resolve claude binary
-		claudeBinary, err := c.getClaudeBinary()
+		// Create runner for the selected provider
+		tmuxClient := tmux.NewClient()
+		agentRunner, err := runner.NewRunner(provider, tmuxClient)
 		if err != nil {
-			return fmt.Errorf("failed to resolve claude binary: %w", err)
+			return fmt.Errorf("failed to create %s runner: %w", provider, err)
+		}
+		if !agentRunner.IsBinaryAvailable() {
+			return fmt.Errorf("%s binary not found in PATH", runner.BinaryName(provider))
 		}
 
-		fmt.Println("Starting Claude Code in supervisor window...")
-		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, "supervisor", repoPath, supervisorSessionID, supervisorPromptFile, repoName, "")
+		fmt.Printf("Starting %s in supervisor window...\n", provider)
+		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, "supervisor", supervisorSessionID, supervisorPromptFile, "")
 		if err != nil {
-			return fmt.Errorf("failed to start supervisor Claude: %w", err)
+			return fmt.Errorf("failed to start supervisor: %w", err)
 		}
 		supervisorPID = pid
 
@@ -1392,12 +1426,12 @@ func (c *CLI) initRepo(args []string) error {
 			fmt.Printf("Warning: failed to setup output capture for supervisor: %v\n", err)
 		}
 
-		// Start Claude in merge-queue window only if enabled
+		// Start agent in merge-queue window only if enabled
 		if mqEnabled {
-			fmt.Println("Starting Claude Code in merge-queue window...")
-			pid, err = c.startClaudeInTmux(claudeBinary, tmuxSession, "merge-queue", repoPath, mergeQueueSessionID, mergeQueuePromptFile, repoName, "")
+			fmt.Printf("Starting %s in merge-queue window...\n", provider)
+			pid, err = c.startAgentInTmux(agentRunner, tmuxSession, "merge-queue", mergeQueueSessionID, mergeQueuePromptFile, "")
 			if err != nil {
-				return fmt.Errorf("failed to start merge-queue Claude: %w", err)
+				return fmt.Errorf("failed to start merge-queue: %w", err)
 			}
 			mergeQueuePID = pid
 
@@ -1406,10 +1440,10 @@ func (c *CLI) initRepo(args []string) error {
 				fmt.Printf("Warning: failed to setup output capture for merge-queue: %v\n", err)
 			}
 		} else if psEnabled {
-			fmt.Println("Starting Claude Code in pr-shepherd window...")
-			pid, err = c.startClaudeInTmux(claudeBinary, tmuxSession, "pr-shepherd", repoPath, prShepherdSessionID, prShepherdPromptFile, repoName, "")
+			fmt.Printf("Starting %s in pr-shepherd window...\n", provider)
+			pid, err = c.startAgentInTmux(agentRunner, tmuxSession, "pr-shepherd", prShepherdSessionID, prShepherdPromptFile, "")
 			if err != nil {
-				return fmt.Errorf("failed to start pr-shepherd Claude: %w", err)
+				return fmt.Errorf("failed to start pr-shepherd: %w", err)
 			}
 			prShepherdPID = pid
 
@@ -1425,6 +1459,7 @@ func (c *CLI) initRepo(args []string) error {
 		"name":          repoName,
 		"github_url":    githubURL,
 		"tmux_session":  tmuxSession,
+		"provider":      string(provider),
 		"mq_enabled":    mqConfig.Enabled,
 		"mq_track_mode": string(mqConfig.TrackMode),
 		"ps_enabled":    psConfig.Enabled,
@@ -1543,7 +1578,7 @@ func (c *CLI) initRepo(args []string) error {
 	}
 
 	// Generate session ID for workspace
-	workspaceSessionID, err := claude.GenerateSessionID()
+	workspaceSessionID, err := runner.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate workspace session ID: %w", err)
 	}
@@ -1559,19 +1594,20 @@ func (c *CLI) initRepo(args []string) error {
 		fmt.Printf("Warning: failed to copy hooks config to default workspace: %v\n", err)
 	}
 
-	// Start Claude in default workspace window (skip in test mode)
+	// Start agent in default workspace window (skip in test mode)
 	var workspacePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
-		// Resolve claude binary
-		claudeBinary, err := c.getClaudeBinary()
+		// Create runner for the selected provider
+		tmuxClient := tmux.NewClient()
+		agentRunner, err := runner.NewRunner(provider, tmuxClient)
 		if err != nil {
-			return fmt.Errorf("failed to resolve claude binary: %w", err)
+			return fmt.Errorf("failed to create %s runner: %w", provider, err)
 		}
 
-		fmt.Println("Starting Claude Code in default workspace window...")
-		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, "default", workspacePath, workspaceSessionID, workspacePromptFile, repoName, "")
+		fmt.Printf("Starting %s in default workspace window...\n", provider)
+		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, "default", workspaceSessionID, workspacePromptFile, "")
 		if err != nil {
-			return fmt.Errorf("failed to start default workspace Claude: %w", err)
+			return fmt.Errorf("failed to start default workspace: %w", err)
 		}
 		workspacePID = pid
 
@@ -2222,7 +2258,7 @@ func (c *CLI) createWorker(args []string) error {
 	}
 
 	// Generate session ID for worker
-	workerSessionID, err := claude.GenerateSessionID()
+	workerSessionID, err := runner.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate worker session ID: %w", err)
 	}
@@ -2263,20 +2299,19 @@ func (c *CLI) createWorker(args []string) error {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
 	}
 
-	// Start Claude in worker window with initial task (skip in test mode)
+	// Start agent in worker window with initial task (skip in test mode)
 	var workerPID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
-		// Resolve claude binary
-		claudeBinary, err := c.getClaudeBinary()
+		agentRunner, providerName, err := c.createRunnerForRepo(repoName)
 		if err != nil {
-			return fmt.Errorf("failed to resolve claude binary: %w", err)
+			return err
 		}
 
-		fmt.Println("Starting Claude Code in worker window...")
+		fmt.Printf("Starting %s in worker window...\n", providerName)
 		initialMessage := fmt.Sprintf("Task: %s", task)
-		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, workerName, wtPath, workerSessionID, workerPromptFile, repoName, initialMessage)
+		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, workerName, workerSessionID, workerPromptFile, initialMessage)
 		if err != nil {
-			return fmt.Errorf("failed to start worker Claude: %w", err)
+			return fmt.Errorf("failed to start worker: %w", err)
 		}
 		workerPID = pid
 
@@ -3349,7 +3384,7 @@ func (c *CLI) addWorkspace(args []string) error {
 	}
 
 	// Generate session ID for workspace
-	workspaceSessionID, err := claude.GenerateSessionID()
+	workspaceSessionID, err := runner.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate workspace session ID: %w", err)
 	}
@@ -3365,19 +3400,18 @@ func (c *CLI) addWorkspace(args []string) error {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
 	}
 
-	// Start Claude in workspace window (skip in test mode)
+	// Start agent in workspace window (skip in test mode)
 	var workspacePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
-		// Resolve claude binary
-		claudeBinary, err := c.getClaudeBinary()
+		agentRunner, providerName, err := c.createRunnerForRepo(repoName)
 		if err != nil {
-			return fmt.Errorf("failed to resolve claude binary: %w", err)
+			return err
 		}
 
-		fmt.Println("Starting Claude Code in workspace window...")
-		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, workspaceName, wtPath, workspaceSessionID, workspacePromptFile, repoName, "")
+		fmt.Printf("Starting %s in workspace window...\n", providerName)
+		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, workspaceName, workspaceSessionID, workspacePromptFile, "")
 		if err != nil {
-			return fmt.Errorf("failed to start workspace Claude: %w", err)
+			return fmt.Errorf("failed to start workspace: %w", err)
 		}
 		workspacePID = pid
 
@@ -4390,7 +4424,7 @@ func (c *CLI) reviewPR(args []string) error {
 	}
 
 	// Generate session ID for reviewer
-	reviewerSessionID, err := claude.GenerateSessionID()
+	reviewerSessionID, err := runner.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate reviewer session ID: %w", err)
 	}
@@ -4406,20 +4440,19 @@ func (c *CLI) reviewPR(args []string) error {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
 	}
 
-	// Start Claude in reviewer window with initial task (skip in test mode)
+	// Start agent in reviewer window with initial task (skip in test mode)
 	var reviewerPID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
-		// Resolve claude binary
-		claudeBinary, err := c.getClaudeBinary()
+		agentRunner, providerName, err := c.createRunnerForRepo(repoName)
 		if err != nil {
-			return fmt.Errorf("failed to resolve claude binary: %w", err)
+			return err
 		}
 
-		fmt.Println("Starting Claude Code in reviewer window...")
+		fmt.Printf("Starting %s in reviewer window...\n", providerName)
 		initialMessage := fmt.Sprintf("Review PR #%s: https://github.com/%s/%s/pull/%s", prNumber, parts[1], parts[2], prNumber)
-		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, reviewerName, wtPath, reviewerSessionID, reviewerPromptFile, repoName, initialMessage)
+		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, reviewerName, reviewerSessionID, reviewerPromptFile, initialMessage)
 		if err != nil {
-			return fmt.Errorf("failed to start reviewer Claude: %w", err)
+			return fmt.Errorf("failed to start reviewer: %w", err)
 		}
 		reviewerPID = pid
 
@@ -5492,7 +5525,7 @@ func (c *CLI) localRepair(verbose bool) error {
 	return nil
 }
 
-// restartClaude restarts Claude in the current agent context.
+// restartClaude restarts the AI agent in the current agent context.
 // It auto-detects whether to use --resume or --session-id based on session history.
 func (c *CLI) restartClaude(args []string) error {
 	// Infer agent context from cwd
@@ -5501,10 +5534,15 @@ func (c *CLI) restartClaude(args []string) error {
 		return fmt.Errorf("cannot determine agent context: %w\n\nRun this command from within a multiclaude agent tmux window", err)
 	}
 
-	// Load state to get session ID
+	// Load state to get session ID and provider
 	st, err := state.Load(c.paths.StateFile)
 	if err != nil {
 		return fmt.Errorf("failed to load state: %w", err)
+	}
+
+	repo, exists := st.GetRepo(repoName)
+	if !exists {
+		return fmt.Errorf("repo '%s' not found in state", repoName)
 	}
 
 	agent, exists := st.GetAgent(repoName, agentName)
@@ -5516,51 +5554,57 @@ func (c *CLI) restartClaude(args []string) error {
 		return fmt.Errorf("agent has no session ID - try removing and recreating the agent")
 	}
 
+	provider := runner.Provider(repo.GetProvider())
+
 	// Get the prompt file path (stored as ~/.multiclaude/prompts/<agent-name>.md)
 	promptFile := filepath.Join(c.paths.PromptsDir, agentName+".md")
 
-	// Check if the session has history by looking for the .jsonl file
-	// Claude stores sessions in ~/.claude/projects/<encoded-path>/<session-id>.jsonl
-	claudeProjectsDir := filepath.Join(os.Getenv("HOME"), ".claude", "projects")
+	// Check if the session has history (provider-specific)
 	hasHistory := false
-
-	// The path encoding replaces / with - and prefixes with -
-	// e.g., /Users/foo/bar becomes -Users-foo-bar
-	encodedPath := strings.ReplaceAll(agent.WorktreePath, "/", "-")
-	sessionFile := filepath.Join(claudeProjectsDir, encodedPath, agent.SessionID+".jsonl")
-
-	if info, err := os.Stat(sessionFile); err == nil {
-		// Check if file has content (not just empty)
-		if info.Size() > 0 {
+	if provider == runner.ProviderClaude {
+		claudeProjectsDir := filepath.Join(os.Getenv("HOME"), ".claude", "projects")
+		encodedPath := strings.ReplaceAll(agent.WorktreePath, "/", "-")
+		sessionFile := filepath.Join(claudeProjectsDir, encodedPath, agent.SessionID+".jsonl")
+		if info, err := os.Stat(sessionFile); err == nil && info.Size() > 0 {
 			hasHistory = true
+		}
+	} else if provider == runner.ProviderCopilot {
+		hasHistory = true
+	}
+
+	// Build the command based on provider
+	var binaryPath string
+	var cmdArgs []string
+
+	switch provider {
+	case runner.ProviderCopilot:
+		binaryPath = runner.ResolveBinaryPath(runner.ProviderCopilot)
+		cmdArgs = []string{"--resume", agent.SessionID, "--allow-all-tools"}
+		if _, err := os.Stat(promptFile); err == nil {
+			cmdArgs = append(cmdArgs, "--agent", promptFile)
+		}
+	default: // claude
+		binaryPath = runner.ResolveBinaryPath(runner.ProviderClaude)
+		if hasHistory {
+			cmdArgs = []string{"--resume", agent.SessionID}
+		} else {
+			cmdArgs = []string{"--session-id", agent.SessionID}
+		}
+		cmdArgs = append(cmdArgs, "--dangerously-skip-permissions")
+		if _, err := os.Stat(promptFile); err == nil {
+			cmdArgs = append(cmdArgs, "--append-system-prompt-file", promptFile)
 		}
 	}
 
-	// Build the command
-	var cmdArgs []string
 	if hasHistory {
-		// Session has history - use --resume to continue
-		cmdArgs = []string{"--resume", agent.SessionID}
-		fmt.Printf("Resuming Claude session %s...\n", agent.SessionID)
+		fmt.Printf("Resuming %s session %s...\n", provider, agent.SessionID)
 	} else {
-		// New session - use --session-id
-		cmdArgs = []string{"--session-id", agent.SessionID}
-		fmt.Printf("Starting new Claude session %s...\n", agent.SessionID)
+		fmt.Printf("Starting new %s session %s...\n", provider, agent.SessionID)
 	}
 
-	// Add common flags
-	cmdArgs = append(cmdArgs, "--dangerously-skip-permissions")
-	if _, err := os.Stat(promptFile); err == nil {
-		cmdArgs = append(cmdArgs, "--append-system-prompt-file", promptFile)
-	}
+	fmt.Printf("Running: %s %s\n\n", binaryPath, strings.Join(cmdArgs, " "))
 
-	// Exec claude
-	claudePath := "claude"
-
-	fmt.Printf("Running: %s %s\n\n", claudePath, strings.Join(cmdArgs, " "))
-
-	// Run claude interactively
-	cmd := exec.Command(claudePath, cmdArgs...)
+	cmd := exec.Command(binaryPath, cmdArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -5908,6 +5952,20 @@ func (c *CLI) startClaudeInTmux(binaryPath, tmuxSession, tmuxWindow, workDir, se
 	}
 
 	return pid, nil
+}
+
+// startAgentInTmux starts an AI agent in a tmux window using the runner interface.
+// Returns the PID of the agent process.
+func (c *CLI) startAgentInTmux(r runner.Runner, tmuxSession, tmuxWindow, sessionID, promptFile, initialMessage string) (int, error) {
+	result, err := r.Start(context.Background(), tmuxSession, tmuxWindow, runner.Config{
+		SessionID:        sessionID,
+		SystemPromptFile: promptFile,
+		InitialMessage:   initialMessage,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to start agent in tmux: %w", err)
+	}
+	return result.PID, nil
 }
 
 // bugReport generates a diagnostic bug report with redacted sensitive information

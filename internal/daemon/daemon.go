@@ -21,24 +21,29 @@ import (
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/internal/worktree"
-	"github.com/dlorenc/multiclaude/pkg/claude"
 	"github.com/dlorenc/multiclaude/pkg/config"
+	"github.com/dlorenc/multiclaude/pkg/runner"
 	"github.com/dlorenc/multiclaude/pkg/tmux"
 )
 
 // Daemon represents the main daemon process
 type Daemon struct {
-	paths        *config.Paths
-	state        *state.State
-	tmux         *tmux.Client
-	logger       *logging.Logger
-	server       *socket.Server
-	pidFile      *PIDFile
-	claudeRunner *claude.Runner
+	paths   *config.Paths
+	state   *state.State
+	tmux    *tmux.Client
+	logger  *logging.Logger
+	server  *socket.Server
+	pidFile *PIDFile
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+}
+
+// runnerForRepo returns the appropriate runner for a repo's configured provider.
+func (d *Daemon) runnerForRepo(repo *state.Repository) (runner.Runner, error) {
+	provider := runner.Provider(repo.GetProvider())
+	return runner.NewRunner(provider, d.tmux)
 }
 
 // New creates a new daemon instance
@@ -64,14 +69,13 @@ func New(paths *config.Paths) (*Daemon, error) {
 
 	tmuxClient := tmux.NewClient()
 	d := &Daemon{
-		paths:        paths,
-		state:        st,
-		tmux:         tmuxClient,
-		logger:       logger,
-		pidFile:      NewPIDFile(paths.DaemonPID),
-		claudeRunner: claude.NewRunner(claude.WithTerminal(tmuxClient)),
-		ctx:          ctx,
-		cancel:       cancel,
+		paths:   paths,
+		state:   st,
+		tmux:    tmuxClient,
+		logger:  logger,
+		pidFile: NewPIDFile(paths.DaemonPID),
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 
 	// Create socket server
@@ -826,6 +830,7 @@ func (d *Daemon) handleAddRepo(req socket.Request) socket.Response {
 	repo := &state.Repository{
 		GithubURL:        githubURL,
 		TmuxSession:      tmuxSession,
+		Provider:         getOptionalStringArg(req.Args, "provider", ""),
 		Agents:           make(map[string]state.Agent),
 		MergeQueueConfig: mqConfig,
 		PRShepherdConfig: psConfig,
@@ -2017,15 +2022,6 @@ func (d *Daemon) sendAgentDefinitionsToSupervisor(repoName, repoPath string, mqC
 	return nil
 }
 
-// getClaudeBinaryPath resolves the claude CLI binary path
-func (d *Daemon) getClaudeBinaryPath() (string, error) {
-	binaryPath, err := exec.LookPath("claude")
-	if err != nil {
-		return "", fmt.Errorf("claude binary not found in PATH: %w", err)
-	}
-	return binaryPath, nil
-}
-
 // agentStartConfig holds configuration for starting an agent
 type agentStartConfig struct {
 	agentName  string
@@ -2037,7 +2033,7 @@ type agentStartConfig struct {
 // startAgentWithConfig is the unified agent start function that handles all common logic
 func (d *Daemon) startAgentWithConfig(repoName string, repo *state.Repository, cfg agentStartConfig) error {
 	// Generate session ID
-	sessionID, err := claude.GenerateSessionID()
+	sessionID, err := runner.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate session ID: %w", err)
 	}
@@ -2050,33 +2046,21 @@ func (d *Daemon) startAgentWithConfig(repoName string, repo *state.Repository, c
 
 	var pid int
 
-	// Skip actual Claude startup in test mode
+	// Skip actual agent startup in test mode
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
-		// Resolve claude binary path
-		binaryPath, err := d.getClaudeBinaryPath()
+		agentRunner, err := d.runnerForRepo(repo)
 		if err != nil {
-			return fmt.Errorf("failed to resolve claude binary: %w", err)
+			return fmt.Errorf("failed to create runner: %w", err)
 		}
 
-		// Build CLI command
-		claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
-			binaryPath, sessionID, cfg.promptFile)
-
-		// Send command to tmux window
-		target := fmt.Sprintf("%s:%s", repo.TmuxSession, cfg.agentName)
-		cmd := exec.Command("tmux", "send-keys", "-t", target, claudeCmd, "C-m")
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to start Claude in tmux: %w", err)
-		}
-
-		// Wait a moment for Claude to start
-		time.Sleep(500 * time.Millisecond)
-
-		// Get PID
-		pid, err = d.tmux.GetPanePID(d.ctx, repo.TmuxSession, cfg.agentName)
+		result, err := agentRunner.Start(d.ctx, repo.TmuxSession, cfg.agentName, runner.Config{
+			SessionID:        sessionID,
+			SystemPromptFile: cfg.promptFile,
+		})
 		if err != nil {
-			return fmt.Errorf("failed to get Claude PID: %w", err)
+			return fmt.Errorf("failed to start agent in tmux: %w", err)
 		}
+		pid = result.PID
 	}
 
 	// Register agent with state
@@ -2144,18 +2128,26 @@ func (d *Daemon) writePromptFileWithPrefix(repoName string, agentType state.Agen
 // It uses --resume to continue the existing session if history exists.
 // This works for all agent types: supervisor, merge-queue, workspace, workers, and review agents.
 func (d *Daemon) restartAgent(repoName, agentName string, agent state.Agent, repo *state.Repository) error {
-	// Check if the session has history
+	// Check if the session has history (provider-specific paths)
+	hasHistory := false
+	provider := runner.Provider(repo.GetProvider())
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	claudeProjectsDir := filepath.Join(home, ".claude", "projects")
-	encodedPath := strings.ReplaceAll(agent.WorktreePath, "/", "-")
-	sessionFile := filepath.Join(claudeProjectsDir, encodedPath, agent.SessionID+".jsonl")
-
-	hasHistory := false
-	if info, err := os.Stat(sessionFile); err == nil && info.Size() > 0 {
+	if provider == runner.ProviderClaude {
+		// Claude stores sessions in ~/.claude/projects/<encoded-path>/<session-id>.jsonl
+		claudeProjectsDir := filepath.Join(home, ".claude", "projects")
+		encodedPath := strings.ReplaceAll(agent.WorktreePath, "/", "-")
+		sessionFile := filepath.Join(claudeProjectsDir, encodedPath, agent.SessionID+".jsonl")
+		if info, err := os.Stat(sessionFile); err == nil && info.Size() > 0 {
+			hasHistory = true
+		}
+	} else if provider == runner.ProviderCopilot {
+		// Copilot uses --resume with UUID for both new and existing sessions.
+		// Always set resume to true for restart since the session existed before.
 		hasHistory = true
 	}
 
@@ -2169,15 +2161,18 @@ func (d *Daemon) restartAgent(repoName, agentName string, agent state.Agent, rep
 		}
 	}
 
-	// Restart Claude using the runner
-	// Note: Slash commands are embedded in prompts, not via CLAUDE_CONFIG_DIR
-	result, err := d.claudeRunner.Start(d.ctx, repo.TmuxSession, agentName, claude.Config{
+	// Restart agent using the provider-appropriate runner
+	agentRunner, err := d.runnerForRepo(repo)
+	if err != nil {
+		return fmt.Errorf("failed to create runner for restart: %w", err)
+	}
+	result, err := agentRunner.Start(d.ctx, repo.TmuxSession, agentName, runner.Config{
 		SessionID:        agent.SessionID,
 		Resume:           hasHistory,
 		SystemPromptFile: promptFile,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to restart Claude: %w", err)
+		return fmt.Errorf("failed to restart agent: %w", err)
 	}
 
 	// Update the agent's PID in state
@@ -2185,7 +2180,7 @@ func (d *Daemon) restartAgent(repoName, agentName string, agent state.Agent, rep
 		d.logger.Warn("Failed to update agent PID: %v", err)
 	}
 
-	d.logger.Info("Restarted agent %s with PID %d (resumed=%v)", agentName, result.PID, hasHistory)
+	d.logger.Info("Restarted agent %s with PID %d (provider=%s, resumed=%v)", agentName, result.PID, provider, hasHistory)
 	return nil
 }
 

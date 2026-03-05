@@ -2206,3 +2206,86 @@ func TestGetTaskHistoryNoLimit(t *testing.T) {
 		t.Errorf("GetTaskHistory() with limit=0 returned %d entries, want 5", len(history))
 	}
 }
+
+func TestRepositoryGetProvider(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		want     string
+	}{
+		{"empty defaults to claude", "", "claude"},
+		{"claude explicit", "claude", "claude"},
+		{"copilot explicit", "copilot", "copilot"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &Repository{Provider: tt.provider}
+			if got := repo.GetProvider(); got != tt.want {
+				t.Errorf("GetProvider() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProviderPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Create state with provider set
+	s := New(statePath)
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Provider:    "copilot",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save() failed: %v", err)
+	}
+
+	// Reload and verify
+	s2, err := Load(statePath)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	loaded, exists := s2.GetRepo("test")
+	if !exists {
+		t.Fatal("repo not found after reload")
+	}
+	if loaded.GetProvider() != "copilot" {
+		t.Errorf("GetProvider() = %q after reload, want %q", loaded.GetProvider(), "copilot")
+	}
+}
+
+func TestProviderBackwardsCompat(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Create state without provider (simulating old state file)
+	s := New(statePath)
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save() failed: %v", err)
+	}
+
+	// Reload and verify defaults to claude
+	s2, err := Load(statePath)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	loaded, _ := s2.GetRepo("test")
+	if loaded.GetProvider() != "claude" {
+		t.Errorf("GetProvider() = %q for old state, want %q", loaded.GetProvider(), "claude")
+	}
+}
