@@ -3,6 +3,7 @@ package copilot
 import (
 "context"
 "errors"
+"os"
 "strings"
 "testing"
 "time"
@@ -124,6 +125,15 @@ func TestStart(t *testing.T) {
 ctx := context.Background()
 terminal := &mockTerminal{getPanePIDReturn: 12345}
 
+// Create a real temp prompt file since installAgentFile reads it
+tmpFile, err := os.CreateTemp("", "test-prompt-*.md")
+if err != nil {
+t.Fatalf("failed to create temp file: %v", err)
+}
+tmpFile.WriteString("test prompt content")
+tmpFile.Close()
+defer os.Remove(tmpFile.Name())
+
 runner := NewRunner(
 WithTerminal(terminal),
 WithBinaryPath("/path/to/copilot"),
@@ -131,7 +141,7 @@ WithStartupDelay(0),
 )
 
 result, err := runner.Start(ctx, "my-session", "my-window", Config{
-SystemPromptFile: "/path/to/prompt.md",
+SystemPromptFile: tmpFile.Name(),
 })
 if err != nil {
 t.Fatalf("Start() failed: %v", err)
@@ -159,8 +169,8 @@ t.Errorf("expected command to contain --resume, got %q", call.text)
 if !strings.Contains(call.text, "--allow-all-tools") {
 t.Errorf("expected command to contain --allow-all-tools, got %q", call.text)
 }
-if !strings.Contains(call.text, "--agent /path/to/prompt.md") {
-	t.Errorf("expected command to contain agent file, got %q", call.text)
+if !strings.Contains(call.text, "--agent ") {
+	t.Errorf("expected command to contain --agent flag, got %q", call.text)
 }
 }
 
@@ -390,6 +400,7 @@ config: Config{SessionID: "test-session", WorkDir: "/path/to/workdir"},
 contains: []string{
 `cd "/path/to/workdir" &&`,
 "/path/to/copilot",
+"--add-dir /path/to/workdir",
 },
 },
 {

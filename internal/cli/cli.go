@@ -1415,7 +1415,7 @@ func (c *CLI) initRepo(args []string) error {
 		}
 
 		fmt.Printf("Starting %s in supervisor window...\n", provider)
-		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, "supervisor", supervisorSessionID, supervisorPromptFile, "")
+		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, "supervisor", supervisorSessionID, supervisorPromptFile, "", repoPath)
 		if err != nil {
 			return fmt.Errorf("failed to start supervisor: %w", err)
 		}
@@ -1429,7 +1429,7 @@ func (c *CLI) initRepo(args []string) error {
 		// Start agent in merge-queue window only if enabled
 		if mqEnabled {
 			fmt.Printf("Starting %s in merge-queue window...\n", provider)
-			pid, err = c.startAgentInTmux(agentRunner, tmuxSession, "merge-queue", mergeQueueSessionID, mergeQueuePromptFile, "")
+			pid, err = c.startAgentInTmux(agentRunner, tmuxSession, "merge-queue", mergeQueueSessionID, mergeQueuePromptFile, "", repoPath)
 			if err != nil {
 				return fmt.Errorf("failed to start merge-queue: %w", err)
 			}
@@ -1441,7 +1441,7 @@ func (c *CLI) initRepo(args []string) error {
 			}
 		} else if psEnabled {
 			fmt.Printf("Starting %s in pr-shepherd window...\n", provider)
-			pid, err = c.startAgentInTmux(agentRunner, tmuxSession, "pr-shepherd", prShepherdSessionID, prShepherdPromptFile, "")
+			pid, err = c.startAgentInTmux(agentRunner, tmuxSession, "pr-shepherd", prShepherdSessionID, prShepherdPromptFile, "", repoPath)
 			if err != nil {
 				return fmt.Errorf("failed to start pr-shepherd: %w", err)
 			}
@@ -1605,7 +1605,7 @@ func (c *CLI) initRepo(args []string) error {
 		}
 
 		fmt.Printf("Starting %s in default workspace window...\n", provider)
-		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, "default", workspaceSessionID, workspacePromptFile, "")
+		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, "default", workspaceSessionID, workspacePromptFile, "", workspacePath)
 		if err != nil {
 			return fmt.Errorf("failed to start default workspace: %w", err)
 		}
@@ -2309,7 +2309,7 @@ func (c *CLI) createWorker(args []string) error {
 
 		fmt.Printf("Starting %s in worker window...\n", providerName)
 		initialMessage := fmt.Sprintf("Task: %s", task)
-		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, workerName, workerSessionID, workerPromptFile, initialMessage)
+		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, workerName, workerSessionID, workerPromptFile, initialMessage, wtPath)
 		if err != nil {
 			return fmt.Errorf("failed to start worker: %w", err)
 		}
@@ -3409,7 +3409,7 @@ func (c *CLI) addWorkspace(args []string) error {
 		}
 
 		fmt.Printf("Starting %s in workspace window...\n", providerName)
-		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, workspaceName, workspaceSessionID, workspacePromptFile, "")
+		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, workspaceName, workspaceSessionID, workspacePromptFile, "", wtPath)
 		if err != nil {
 			return fmt.Errorf("failed to start workspace: %w", err)
 		}
@@ -4450,7 +4450,7 @@ func (c *CLI) reviewPR(args []string) error {
 
 		fmt.Printf("Starting %s in reviewer window...\n", providerName)
 		initialMessage := fmt.Sprintf("Review PR #%s: https://github.com/%s/%s/pull/%s", prNumber, parts[1], parts[2], prNumber)
-		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, reviewerName, reviewerSessionID, reviewerPromptFile, initialMessage)
+		pid, err := c.startAgentInTmux(agentRunner, tmuxSession, reviewerName, reviewerSessionID, reviewerPromptFile, initialMessage, wtPath)
 		if err != nil {
 			return fmt.Errorf("failed to start reviewer: %w", err)
 		}
@@ -5580,8 +5580,20 @@ func (c *CLI) restartClaude(args []string) error {
 	case runner.ProviderCopilot:
 		binaryPath = runner.ResolveBinaryPath(runner.ProviderCopilot)
 		cmdArgs = []string{"--resume", agent.SessionID, "--allow-all-tools"}
+		if agent.WorktreePath != "" {
+			cmdArgs = append(cmdArgs, "--add-dir", agent.WorktreePath)
+		}
 		if _, err := os.Stat(promptFile); err == nil {
-			cmdArgs = append(cmdArgs, "--agent", promptFile)
+			// Install agent file into ~/.copilot/agents/ since --agent expects a name, not a path
+			home, _ := os.UserHomeDir()
+			agentsDir := filepath.Join(home, ".copilot", "agents")
+			os.MkdirAll(agentsDir, 0755)
+			baseName := filepath.Base(promptFile)
+			agentName := strings.TrimSuffix(baseName, ".md")
+			if content, err := os.ReadFile(promptFile); err == nil {
+				os.WriteFile(filepath.Join(agentsDir, baseName), content, 0644)
+			}
+			cmdArgs = append(cmdArgs, "--agent", agentName)
 		}
 	default: // claude
 		binaryPath = runner.ResolveBinaryPath(runner.ProviderClaude)
@@ -5956,11 +5968,12 @@ func (c *CLI) startClaudeInTmux(binaryPath, tmuxSession, tmuxWindow, workDir, se
 
 // startAgentInTmux starts an AI agent in a tmux window using the runner interface.
 // Returns the PID of the agent process.
-func (c *CLI) startAgentInTmux(r runner.Runner, tmuxSession, tmuxWindow, sessionID, promptFile, initialMessage string) (int, error) {
+func (c *CLI) startAgentInTmux(r runner.Runner, tmuxSession, tmuxWindow, sessionID, promptFile, initialMessage, workDir string) (int, error) {
 	result, err := r.Start(context.Background(), tmuxSession, tmuxWindow, runner.Config{
 		SessionID:        sessionID,
 		SystemPromptFile: promptFile,
 		InitialMessage:   initialMessage,
+		WorkDir:          workDir,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("failed to start agent in tmux: %w", err)

@@ -2056,6 +2056,7 @@ func (d *Daemon) startAgentWithConfig(repoName string, repo *state.Repository, c
 		result, err := agentRunner.Start(d.ctx, repo.TmuxSession, cfg.agentName, runner.Config{
 			SessionID:        sessionID,
 			SystemPromptFile: cfg.promptFile,
+			WorkDir:          cfg.workDir,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to start agent in tmux: %w", err)
@@ -2170,6 +2171,7 @@ func (d *Daemon) restartAgent(repoName, agentName string, agent state.Agent, rep
 		SessionID:        agent.SessionID,
 		Resume:           hasHistory,
 		SystemPromptFile: promptFile,
+		WorkDir:          agent.WorktreePath,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to restart agent: %w", err)

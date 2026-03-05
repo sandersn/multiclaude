@@ -4,7 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -189,6 +192,17 @@ func (r *Runner) Start(ctx context.Context, session, window string, cfg Config) 
 		}
 	}
 
+	// Install the agent file into .github/agents/ in the working directory.
+	// Copilot's --agent flag looks up agents by name from .github/agents/ in
+	// the repo, not by arbitrary file path.
+	if cfg.SystemPromptFile != "" && cfg.WorkDir != "" {
+		agentName, err := installAgentFile(cfg.SystemPromptFile, cfg.WorkDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to install agent file: %w", err)
+		}
+		cfg.SystemPromptFile = agentName
+	}
+
 	// Build the command
 	cmd := r.buildCommand(sessionID, cfg)
 
@@ -267,6 +281,11 @@ func (r *Runner) buildCommand(sessionID string, cfg Config) string {
 		cmd += " --allow-all-tools"
 	}
 
+	// Trust the working directory so Copilot doesn't prompt for folder approval
+	if cfg.WorkDir != "" {
+		cmd += fmt.Sprintf(" --add-dir %s", cfg.WorkDir)
+	}
+
 	// Add agent definition file
 	if cfg.SystemPromptFile != "" {
 		cmd += fmt.Sprintf(" --agent %s", cfg.SystemPromptFile)
@@ -288,6 +307,37 @@ func (r *Runner) SendMessage(ctx context.Context, session, window, message strin
 	}
 
 	return nil
+}
+
+// installAgentFile copies a prompt file into .github/agents/ in the working
+// directory and returns the agent name (filename without .md extension) for
+// use with --agent. Prepends YAML frontmatter if not already present.
+func installAgentFile(promptPath, workDir string) (string, error) {
+	agentsDir := filepath.Join(workDir, ".github", "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create agents directory: %w", err)
+	}
+
+	baseName := filepath.Base(promptPath)
+	agentName := strings.TrimSuffix(baseName, ".md")
+
+	content, err := os.ReadFile(promptPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read prompt file: %w", err)
+	}
+
+	// Prepend YAML frontmatter if not already present
+	if !strings.HasPrefix(string(content), "---") {
+		frontmatter := fmt.Sprintf("---\nname: %s\ndescription: multiclaude %s agent\n---\n\n", agentName, agentName)
+		content = append([]byte(frontmatter), content...)
+	}
+
+	dst := filepath.Join(agentsDir, baseName)
+	if err := os.WriteFile(dst, content, 0644); err != nil {
+		return "", fmt.Errorf("failed to write agent file: %w", err)
+	}
+
+	return agentName, nil
 }
 
 // GenerateSessionID generates a UUID v4 session ID.
