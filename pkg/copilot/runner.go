@@ -3,6 +3,7 @@ package copilot
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -192,6 +193,13 @@ func (r *Runner) Start(ctx context.Context, session, window string, cfg Config) 
 		}
 	}
 
+	// Ensure the working directory is trusted so Copilot doesn't prompt for folder approval
+	if cfg.WorkDir != "" {
+		if err := ensureTrustedFolder(cfg.WorkDir); err != nil {
+			// Non-fatal: agent will still work, just may prompt for trust
+		}
+	}
+
 	// Install the agent file into .github/agents/ in the working directory.
 	// Copilot's --agent flag looks up agents by name from .github/agents/ in
 	// the repo, not by arbitrary file path.
@@ -281,7 +289,7 @@ func (r *Runner) buildCommand(sessionID string, cfg Config) string {
 		cmd += " --allow-all-tools"
 	}
 
-	// Trust the working directory so Copilot doesn't prompt for folder approval
+	// Add working directory to the allowed file access list
 	if cfg.WorkDir != "" {
 		cmd += fmt.Sprintf(" --add-dir %s", cfg.WorkDir)
 	}
@@ -307,6 +315,70 @@ func (r *Runner) SendMessage(ctx context.Context, session, window, message strin
 	}
 
 	return nil
+}
+
+// ensureTrustedFolder adds a directory to the trusted_folders list in
+// ~/.copilot/config.json so Copilot doesn't prompt for folder approval.
+func ensureTrustedFolder(dir string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	configDir := filepath.Join(home, ".copilot")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return err
+	}
+
+	configPath := filepath.Join(configDir, "config.json")
+
+	// Read existing config
+	config := make(map[string]interface{})
+	if data, err := os.ReadFile(configPath); err == nil {
+		if err := json.Unmarshal(data, &config); err != nil {
+			// If config is corrupt, start fresh rather than losing settings
+			config = make(map[string]interface{})
+		}
+	}
+
+	// Get or create trusted_folders list
+	var folders []string
+	if existing, ok := config["trusted_folders"]; ok {
+		if arr, ok := existing.([]interface{}); ok {
+			for _, v := range arr {
+				if s, ok := v.(string); ok {
+					folders = append(folders, s)
+				}
+			}
+		}
+	}
+
+	// Check if already trusted
+	for _, f := range folders {
+		if f == dir {
+			return nil
+		}
+	}
+
+	// Add and write back
+	folders = append(folders, dir)
+	config["trusted_folders"] = folders
+
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return atomicWriteFile(configPath, data, 0644)
+}
+
+// atomicWriteFile writes data to a file atomically via temp file + rename.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // installAgentFile copies a prompt file into .github/agents/ in the working
